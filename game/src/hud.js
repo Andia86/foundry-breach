@@ -29,7 +29,12 @@ export class Hud {
     this.channelFill = $('channel-fill');
     this.channelCap = $('channel-cap');
     this.damageEl = $('damage');
+    this.dmgDirEl = $('dmgdir');
+    this.killNoteEl = $('killnote');
+    this.roundEl = $('round-num');
+    this.crossEl = $('crosshair');
     this.hitTimer = 0;
+    this.killNoteTimer = 0;
     for (const [id, n] of [['pips-j', 6], ['pips-w', 6]]) {
       const box = $(id);
       for (let i = 0; i < n; i++) box.appendChild(document.createElement('i'));
@@ -75,11 +80,36 @@ export class Hud {
   hitmarker(kill) {
     this.hitEl.className = kill ? 'on kill' : 'on';
     clearTimeout(this.hitTimer);
-    this.hitTimer = setTimeout(() => { this.hitEl.className = ''; }, 130);
+    this.hitTimer = setTimeout(() => { this.hitEl.className = ''; }, kill ? 220 : 130);
   }
   damageFlash() {
     this.damageEl.style.opacity = 1;
     setTimeout(() => { this.damageEl.style.opacity = 0; }, 160);
+  }
+  // Directional damage arc: rad is the attacker's bearing relative to the
+  // way the player faces (0 = straight ahead), shown as a rotating wedge.
+  damageDir(rad) {
+    if (!this.dmgDirEl) return;
+    this.dmgDirEl.style.transform = `translate(-50%, -50%) rotate(${rad}rad)`;
+    this.dmgDirEl.style.opacity = 1;
+    clearTimeout(this.dmgDirTimer);
+    this.dmgDirTimer = setTimeout(() => { this.dmgDirEl.style.opacity = 0; }, 650);
+  }
+  killNote(text) {
+    if (!this.killNoteEl) return;
+    this.killNoteEl.textContent = text;
+    this.killNoteEl.className = 'on';
+    clearTimeout(this.killNoteTimer);
+    this.killNoteTimer = setTimeout(() => { this.killNoteEl.className = ''; }, 1500);
+  }
+  setRound(n, total) {
+    if (this.roundEl) this.roundEl.textContent = `ROUND ${n}/${total}`;
+  }
+  // Crosshair ticks breathe with the weapon's live spread.
+  setCrosshairSpread(spread) {
+    if (!this.crossEl) return;
+    const gap = 5 + Math.min(16, spread * 340);
+    this.crossEl.style.setProperty('--gap', `${gap.toFixed(1)}px`);
   }
   killfeed(killer, victim, gunName) {
     const row = document.createElement('div');
@@ -95,6 +125,11 @@ export class Hud {
     this.bannerEl.className = cls;
     this.bannerEl.querySelector('.big').textContent = big;
     this.bannerEl.querySelector('.sub').textContent = sub ?? '';
+    // Restart the entrance animation even when banners fire back to back.
+    const inner = this.bannerEl.querySelector('.big');
+    inner.style.animation = 'none';
+    void inner.offsetWidth;
+    inner.style.animation = '';
   }
   hideBanner() { this.bannerEl.hidden = true; }
   prompt(html) {

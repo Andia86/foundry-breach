@@ -27,6 +27,26 @@ function groundTexture() {
     g.ellipse(Math.random() * 512, Math.random() * 512, 18 + Math.random() * 46, 10 + Math.random() * 26, Math.random() * 3, 0, 7);
     g.fill();
   }
+  // Steel plate seams and rivets: the yard floor is plated, not poured.
+  g.strokeStyle = 'rgba(10,10,12,0.55)';
+  g.lineWidth = 2;
+  for (let i = 0; i <= 512; i += 128) {
+    g.beginPath(); g.moveTo(i, 0); g.lineTo(i, 512); g.stroke();
+    g.beginPath(); g.moveTo(0, i); g.lineTo(512, i); g.stroke();
+  }
+  g.fillStyle = 'rgba(160,160,150,0.35)';
+  for (let x = 8; x < 512; x += 128) for (let y = 8; y < 512; y += 128) {
+    for (const [rx, ry] of [[0, 0], [112, 0], [0, 112], [112, 112]]) {
+      g.beginPath(); g.arc(x + rx, y + ry, 2.4, 0, 7); g.fill();
+    }
+  }
+  // Warm bounce: faint rust blooms where the furnace heat has stained plates.
+  for (let i = 0; i < 14; i++) {
+    g.fillStyle = `rgba(150,80,40,${0.04 + Math.random() * 0.06})`;
+    g.beginPath();
+    g.ellipse(Math.random() * 512, Math.random() * 512, 22 + Math.random() * 50, 14 + Math.random() * 30, Math.random() * 3, 0, 7);
+    g.fill();
+  }
   g.strokeStyle = 'rgba(210,170,60,0.20)';
   g.lineWidth = 3;
   g.strokeRect(14, 14, 484, 484);
@@ -35,6 +55,41 @@ function groundTexture() {
   tex.repeat.set(9, 9);
   tex.anisotropy = 4;
   return tex;
+}
+
+// Vertical dusk gradient for the sky dome: deep blue up top, a band of
+// furnace-orange at the horizon where the sun has just dropped.
+function skyTexture() {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 512;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, 512);
+  grad.addColorStop(0.0, '#0d1524');
+  grad.addColorStop(0.38, '#27354e');
+  grad.addColorStop(0.52, '#6b4a3a');
+  grad.addColorStop(0.60, '#c96a35');
+  grad.addColorStop(0.66, '#e88a44');
+  grad.addColorStop(0.72, '#5a3d33');
+  grad.addColorStop(1.0, '#241d1c');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 64, 512);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// Soft round puff for the stack smoke.
+function puffTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(64, 64, 4, 64, 64, 62);
+  grad.addColorStop(0, 'rgba(200,190,180,0.32)');
+  grad.addColorStop(0.6, 'rgba(170,160,155,0.16)');
+  grad.addColorStop(1, 'rgba(160,150,145,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(c);
 }
 
 function hazardTexture() {
@@ -54,16 +109,51 @@ function hazardTexture() {
   return tex;
 }
 
+// Weathered concrete: streaks, stains and formwork lines so big wall
+// faces read as material instead of flat grey boxes.
+function concreteTexture(base, streak) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = base;
+  g.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 5200; i++) {
+    const v = Math.random() * 26 - 13;
+    g.fillStyle = `rgba(${128 + v},${128 + v},${124 + v},0.14)`;
+    g.fillRect(Math.random() * 256, Math.random() * 256, 2, 2);
+  }
+  for (let i = 0; i < 22; i++) { // rain streaks running down
+    const x = Math.random() * 256;
+    g.fillStyle = `rgba(20,18,16,${0.05 + Math.random() * 0.1})`;
+    g.fillRect(x, Math.random() * 60, 2 + Math.random() * 4, 90 + Math.random() * 160);
+  }
+  g.fillStyle = streak;
+  g.fillRect(0, 226, 256, 30); // grime at the foot of the wall
+  g.strokeStyle = 'rgba(15,15,16,0.35)';
+  g.lineWidth = 2;
+  g.strokeRect(1, 1, 254, 254);
+  g.beginPath(); g.moveTo(0, 128); g.lineTo(256, 128); g.stroke();
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 4;
+  return tex;
+}
+
 export function buildWorld(scene) {
   const colliders = [];
   const dynamics = [];
 
-  scene.background = new THREE.Color(0x232b38);
-  scene.fog = new THREE.Fog(0x2b3038, 46, 118);
+  // Gradient sky dome (fog-exempt) so the yard sits under a real dusk.
+  const sky = new THREE.Mesh(
+    new THREE.SphereGeometry(220, 24, 16),
+    new THREE.MeshBasicMaterial({ map: skyTexture(), side: THREE.BackSide, fog: false, depthWrite: false }),
+  );
+  scene.add(sky);
+  scene.fog = new THREE.Fog(0x4a3630, 38, 108);
 
-  const hemi = new THREE.HemisphereLight(0x93aed6, 0x40342a, 1.1);
+  const hemi = new THREE.HemisphereLight(0x93aed6, 0x40342a, 1.15);
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight(0xffb36b, 2.4);
+  const sun = new THREE.DirectionalLight(0xffab5e, 2.7);
   sun.position.set(-38, 42, -20);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
@@ -71,6 +161,7 @@ export function buildWorld(scene) {
   sun.shadow.camera.top = 46; sun.shadow.camera.bottom = -46;
   sun.shadow.camera.far = 130;
   sun.shadow.bias = -0.0006;
+  sun.shadow.normalBias = 0.02;
   scene.add(sun);
   const fill = new THREE.DirectionalLight(0x5f7ca6, 0.35);
   fill.position.set(30, 24, 34);
@@ -78,14 +169,14 @@ export function buildWorld(scene) {
 
   const mats = {
     ground: new THREE.MeshStandardMaterial({ map: groundTexture(), roughness: 0.96, metalness: 0.02 }),
-    wall: new THREE.MeshStandardMaterial({ color: 0x5d6066, roughness: 0.9 }),
-    wallDark: new THREE.MeshStandardMaterial({ color: 0x43464c, roughness: 0.92 }),
+    wall: new THREE.MeshStandardMaterial({ map: concreteTexture('#6a6d72', 'rgba(30,26,22,0.5)'), roughness: 0.92 }),
+    wallDark: new THREE.MeshStandardMaterial({ map: concreteTexture('#4a4d52', 'rgba(16,14,12,0.55)'), roughness: 0.94 }),
     rust: new THREE.MeshStandardMaterial({ color: 0x8a4a30, roughness: 0.8, metalness: 0.25 }),
     steel: new THREE.MeshStandardMaterial({ color: 0x707880, roughness: 0.45, metalness: 0.7 }),
     crate: new THREE.MeshStandardMaterial({ color: 0x77683f, roughness: 0.85 }),
     crateBlue: new THREE.MeshStandardMaterial({ color: 0x39586e, roughness: 0.85 }),
     hazard: new THREE.MeshStandardMaterial({ map: hazardTexture(), roughness: 0.8 }),
-    glow: new THREE.MeshStandardMaterial({ color: 0x201408, emissive: 0xff7a26, emissiveIntensity: 2.4 }),
+    glow: new THREE.MeshStandardMaterial({ color: 0x201408, emissive: 0xff7a26, emissiveIntensity: 1.65 }),
     coreGlow: new THREE.MeshStandardMaterial({ color: 0x0d2020, emissive: 0x2ee6c8, emissiveIntensity: 2.8 }),
     dark: new THREE.MeshStandardMaterial({ color: 0x24262a, roughness: 0.95 }),
   };
@@ -103,6 +194,17 @@ export function buildWorld(scene) {
   ring.rotation.x = -Math.PI / 2;
   ring.position.set(SITE.x, 0.02, SITE.z);
   scene.add(ring);
+  // Objective beacon: a faint pillar of light over the pad so the goal
+  // of the round is readable from anywhere on the map (and in stills).
+  const sitePillar = new THREE.Mesh(
+    new THREE.CylinderGeometry(2.5, 2.5, 17, 24, 1, true),
+    new THREE.MeshBasicMaterial({
+      color: 0xff8c3a, transparent: true, opacity: 0.05,
+      blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false, fog: false,
+    }),
+  );
+  sitePillar.position.set(SITE.x, 8.5, SITE.z);
+  scene.add(sitePillar);
   dynamics.push((t) => { ring.material.opacity = 0.38 + Math.sin(t * 2.2) * 0.14; });
 
   function box(cx, cz, w, d, h, mat, { collide = true, sight = null, y = 0 } = {}) {
@@ -154,6 +256,41 @@ export function buildWorld(scene) {
   scene.add(stack);
   furnace.castShadow = true;
 
+  // Smoke drifting off the stack: a ring of soft sprites, each rising,
+  // swelling and fading on its own phase of the cycle.
+  const puffTex = puffTexture();
+  const puffs = [];
+  for (let i = 0; i < 11; i++) {
+    const sm = new THREE.SpriteMaterial({ map: puffTex, transparent: true, opacity: 0, depthWrite: false });
+    const s = new THREE.Sprite(sm);
+    s.userData.phase = i / 11;
+    scene.add(s);
+    puffs.push(s);
+  }
+  dynamics.push((t) => {
+    for (const s of puffs) {
+      const p = (t * 0.045 + s.userData.phase) % 1;
+      s.position.set(Math.sin(p * 5 + s.userData.phase * 9) * 0.7 + p * 6, 14.6 + p * 11, Math.cos(p * 4) * 0.5 - p * 2);
+      const sc = 2.2 + p * 6.5;
+      s.scale.set(sc, sc, 1);
+      s.material.opacity = 0.34 * Math.sin(p * Math.PI);
+    }
+  });
+
+  // A second furnace mouth on the east face and a pipe run along the hall,
+  // so the centrepiece reads from the reactor pad too.
+  const mouth2 = new THREE.Mesh(new THREE.BoxGeometry(0.3, 2.0, 3.0), mats.glow);
+  mouth2.position.set(3.15, 1.3, 0);
+  scene.add(mouth2);
+  const pipeMat = mats.steel;
+  for (const pz of [-3.4, 3.4]) {
+    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 15, 8), pipeMat);
+    pipe.rotation.z = Math.PI / 2;
+    pipe.position.set(0, 3.9, pz);
+    pipe.castShadow = true;
+    scene.add(pipe);
+  }
+
   // The reactor: a squat cylinder on the pad with a glowing core column.
   const reactorBase = new THREE.Mesh(new THREE.CylinderGeometry(2.3, 2.6, 1, 18), mats.steel);
   reactorBase.position.set(REACTOR.x, 0.5, REACTOR.z);
@@ -170,6 +307,25 @@ export function buildWorld(scene) {
   coreLight.position.set(REACTOR.x, 3, REACTOR.z);
   scene.add(coreLight);
   dynamics.push((t) => { coreLight.intensity = 22 + Math.sin(t * 3.1) * 5; });
+  // Hazard apron and a blinking warning beacon on the reactor crown.
+  const apron = new THREE.Mesh(new THREE.CylinderGeometry(3.1, 3.1, 0.14, 24), mats.hazard);
+  apron.position.set(REACTOR.x, 0.07, REACTOR.z);
+  apron.receiveShadow = true;
+  scene.add(apron);
+  const beacon = new THREE.Mesh(
+    new THREE.SphereGeometry(0.17, 8, 8),
+    new THREE.MeshStandardMaterial({ color: 0x1a0500, emissive: 0xff3822, emissiveIntensity: 3 }),
+  );
+  beacon.position.set(REACTOR.x, 4.85, REACTOR.z);
+  scene.add(beacon);
+  const beaconLight = new THREE.PointLight(0xff3822, 0, 11, 2);
+  beaconLight.position.copy(beacon.position);
+  scene.add(beaconLight);
+  dynamics.push((t) => {
+    const on = (t % 1.4) < 0.18;
+    beacon.material.emissiveIntensity = on ? 4.5 : 0.4;
+    beaconLight.intensity = on ? 9 : 0;
+  });
   colliders.push({ minX: REACTOR.x - 2.3, maxX: REACTOR.x + 2.3, minZ: REACTOR.z - 2.3, maxZ: REACTOR.z + 2.3, sight: true });
 
   // North lane ("the Catwalk"): long low walls and a raised platform edge.
@@ -212,14 +368,27 @@ export function buildWorld(scene) {
     scene.add(pl);
   }
 
-  // Distant skyline silhouettes so the yard does not end at the fence.
+  // Distant skyline silhouettes so the yard does not end at the fence,
+  // with a scatter of lit windows so the dusk reads as a working district.
+  const winMat = new THREE.MeshBasicMaterial({ color: 0xc99a58, fog: true });
+  const winMatDim = new THREE.MeshBasicMaterial({ color: 0x7186a3, fog: true });
   for (let i = 0; i < 14; i++) {
     const a = (i / 14) * Math.PI * 2;
     const d = 62 + (i % 3) * 9;
     const h = 8 + ((i * 7) % 13);
     const s = new THREE.Mesh(new THREE.BoxGeometry(10, h, 10), mats.dark);
     s.position.set(Math.cos(a) * d, h / 2 - 0.5, Math.sin(a) * d);
+    s.lookAt(0, h / 2 - 0.5, 0);
     scene.add(s);
+    const wins = 2 + (i % 3);
+    for (let wdi = 0; wdi < wins; wdi++) {
+      const win = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.65, 0.85),
+        (i + wdi) % 3 === 0 ? winMatDim : winMat,
+      );
+      win.position.set(((wdi % 3) - 1) * 2.6, 1.8 + ((i * 3 + wdi * 2.2) % Math.max(2, h - 4)), 5.06);
+      s.add(win);
+    }
   }
 
   const nodes = [

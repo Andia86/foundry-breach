@@ -83,8 +83,63 @@ const G = {
   over: false,
 };
 
+// ---------- impact sparks (one pooled THREE.Points, no per-hit allocation) ----------
+const PMAX = 260;
+const pGeo = new THREE.BufferGeometry();
+const pPos = new Float32Array(PMAX * 3);
+const pCol = new Float32Array(PMAX * 3);
+for (let i = 0; i < PMAX; i++) pPos[i * 3 + 1] = -999;
+pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
+pGeo.setAttribute('color', new THREE.BufferAttribute(pCol, 3));
+const pPoints = new THREE.Points(pGeo, new THREE.PointsMaterial({
+  size: 0.11, vertexColors: true, transparent: true, opacity: 0.95,
+  blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
+}));
+pPoints.frustumCulled = false;
+scene.add(pPoints);
+const parts = new Array(PMAX).fill(null);
+let pCursor = 0;
+function emitSparks(origin, colorHex, n = 7, speed = 3.4) {
+  const c = new THREE.Color(colorHex);
+  for (let k = 0; k < n; k++) {
+    const i = pCursor; pCursor = (pCursor + 1) % PMAX;
+    pPos[i * 3] = origin.x; pPos[i * 3 + 1] = origin.y; pPos[i * 3 + 2] = origin.z;
+    pCol[i * 3] = c.r; pCol[i * 3 + 1] = c.g; pCol[i * 3 + 2] = c.b;
+    parts[i] = {
+      vx: (Math.random() - 0.5) * speed, vy: Math.random() * speed * 0.9 + 0.7, vz: (Math.random() - 0.5) * speed,
+      life: 0, max: 0.26 + Math.random() * 0.26,
+    };
+  }
+}
+function stepParticles(dt) {
+  let any = false;
+  for (let i = 0; i < PMAX; i++) {
+    const p = parts[i];
+    if (!p) continue;
+    any = true;
+    p.life += dt;
+    if (p.life >= p.max) { parts[i] = null; pPos[i * 3 + 1] = -999; continue; }
+    p.vy -= 9.5 * dt;
+    pPos[i * 3] += p.vx * dt; pPos[i * 3 + 1] += p.vy * dt; pPos[i * 3 + 2] += p.vz * dt;
+    if (pPos[i * 3 + 1] < 0.04) { pPos[i * 3 + 1] = 0.04; p.vy *= -0.35; }
+  }
+  if (any) {
+    pGeo.attributes.position.needsUpdate = true;
+    pGeo.attributes.color.needsUpdate = true;
+  }
+}
+
+let shake = 0;
+let prevKick = 0;
+let prevKickYaw = 0;
+
 const tracers = [];
 const tracerMat = new THREE.LineBasicMaterial({ color: 0xffd9a0, transparent: true, opacity: 0.85 });
+
+// Match telemetry, exposed for the demo/screenshot harness to verify the
+// simulation is really fighting (shots fired, hits landed, kills made).
+const FB_STATS = { shots: 0, hits: 0, kills: 0 };
+window.__FB__ = FB_STATS;
 function tracer(from, to, color) {
   const geo = new THREE.BufferGeometry().setFromPoints([from, to]);
   const mat = tracerMat.clone();
@@ -109,14 +164,26 @@ function applyDamage(victim, dmg, attacker, weaponId, head) {
   if (!victim.alive || G.phase === 'roundEnd' || G.phase === 'matchEnd') return;
   if (victim.armor) dmg *= head ? 0.7 : 0.55;
   victim.hp -= dmg;
+  FB_STATS.hits += 1;
   const killed = victim.hp <= 0;
   if (attacker.isPlayer) {
     hud.hitmarker(killed);
     sound.hit(killed);
+    if (head && !killed) sound.headshot();
   }
   if (victim.isPlayer) {
     hud.damageFlash();
     sound.hurt();
+    shake = Math.min(0.55, shake + 0.2);
+    if (attacker && attacker.pos) {
+      // Bearing of the shooter relative to where the player faces.
+      const ax = attacker.pos.x - victim.pos.x, az = attacker.pos.z - victim.pos.z;
+      const al = Math.hypot(ax, az) || 1;
+      const s = Math.sin(player.yaw), c = Math.cos(player.yaw);
+      const fwd = (ax / al) * -s + (az / al) * -c;
+      const rgt = (ax / al) * c + (az / al) * -s;
+      hud.damageDir(Math.atan2(rgt, fwd));
+    }
   }
   if (killed) kill(victim, attacker, weaponId, head);
 }
@@ -124,6 +191,7 @@ function applyDamage(victim, dmg, attacker, weaponId, head) {
 function kill(victim, attacker, weaponId, head) {
   victim.hp = 0;
   victim.alive = false;
+  FB_STATS.kills += 1;
   if (victim.hasCharge) {
     victim.hasCharge = false;
     G.carrier = null;
@@ -140,6 +208,7 @@ function kill(victim, attacker, weaponId, head) {
   if (attacker.isPlayer && attacker !== victim) {
     G.kills += 1;
     G.money += 300;
+    hud.killNote(`ELIMINATED ${victim.name}${head ? ' — HEADSHOT' : ''}  +$300`);
   }
   checkRoundEnd();
 }
@@ -167,8 +236,9 @@ function playerShoot(now) {
     return;
   }
   rig.fire(now);
+  FB_STATS.shots += 1;
   sound.shot(w.id);
-  const spread = rig.spreadNow(player.moveSpeedNow > 0.6, !player.grounded);
+  const spread = rig.spreadNow(player.moveSpeedNow, !player.grounded);
   const dir = new THREE.Vector3();
   camera.getWorldDirection(dir);
   for (let p = 0; p < w.pellets; p++) {
@@ -195,11 +265,14 @@ function playerShoot(now) {
     if (best && best.t < blockT) {
       const hitPoint = origin.clone().addScaledVector(d, best.t);
       tracer(from, hitPoint, w.tracer);
+      emitSparks(hitPoint, best.head ? 0xffe9a0 : 0xff9050, best.head ? 10 : 7, 3.6);
       const dist = best.t;
       let dmg = damageFalloff(w.damage, dist) * (best.head ? w.headMult : 1);
       applyDamage(best.actor, dmg, playerActor, w.id, best.head);
     } else if (blockT < 60) {
-      tracer(from, origin.clone().addScaledVector(d, blockT), w.tracer);
+      const hitPoint = origin.clone().addScaledVector(d, blockT);
+      tracer(from, hitPoint, w.tracer);
+      emitSparks(hitPoint, 0xd8c9a8, 5, 2.6);
     } else {
       tracer(from, origin.clone().addScaledVector(d, 60), w.tracer);
     }
@@ -225,7 +298,9 @@ function rayBoxXZ(origin, dir, c) {
 
 function botShoot(bot, target, dist) {
   const w = WEAPONS[bot.weaponId];
-  if (dist < 34) sound.shot(bot.weaponId);
+  FB_STATS.shots += 1;
+  if (dist < 34) sound.shot(bot.weaponId, 1 / (1 + dist * 0.09));
+  if (bot.muzzleFlash) bot.muzzleFlash();
   const from = muzzleOf(bot);
   const aimAt = target.eye.clone();
   aimAt.y -= 0.25;
@@ -236,6 +311,7 @@ function botShoot(bot, target, dist) {
   const hit = Math.random() < chance;
   if (hit) {
     tracer(from, aimAt, w.tracer);
+    emitSparks(aimAt, 0xff9050, 5, 3);
     const head = Math.random() < 0.1;
     let dmg = damageFalloff(w.damage, dist) * rand(0.45, 0.75) * (head ? w.headMult * 0.8 : 1);
     if (bot.weaponId === 'scatter') dmg *= rand(1.2, 2.2);
@@ -334,6 +410,7 @@ function endRound(winner, reason) {
 
 function explode() {
   sound.explosion();
+  shake = Math.min(0.8, shake + 0.55);
   plantLight.intensity = 90;
   const flash = new THREE.Mesh(
     new THREE.SphereGeometry(1, 16, 12),
@@ -404,6 +481,7 @@ function startRound() {
 
   hud.setScore(G.scoreJ, G.scoreW);
   hud.setAlive(teamAlive('atk'), teamAlive('def'));
+  hud.setRound(G.round, 11);
   hud.banner(`ROUND ${G.round}`, carrier.isPlayer ? 'You carry the breach charge' : `${carrier.name} carries the breach charge`, '');
   if (!G.demo) openBuy();
 }
@@ -490,12 +568,24 @@ function botGoal(bot) {
       return { node: 7 };
     }
     if (G.planted) return { node: pick([6, 13, 20]), hold: true };
+    // Escort: even-id Jackals without the charge shadow the carrier's
+    // position instead of wandering off down a second lane alone.
+    if (G.carrier && G.carrier.alive && !G.carrier.isPlayer && bot.id % 2 === 0) {
+      return { node: nearestNodeSafe({ pos: G.carrier.pos }) };
+    }
     return { node: ATK_PUSH[bot.id % ATK_PUSH.length] };
   }
   // Wardens.
   if (G.planted) {
-    if (inSite(bot.pos.x, bot.pos.z)) return { channel: 'defuse' };
-    return { node: 7, point: { x: SITE.x - 3, z: SITE.z + 2 } };
+    // One Warden works the defuse; the rest hold angles covering the pad
+    // instead of queueing up in the open to be shot one by one.
+    const others = squad.filter((a) => a.team === 'def' && a.alive)
+      .sort((a, b) => Math.hypot(a.pos.x - SITE.x, a.pos.z - SITE.z) - Math.hypot(b.pos.x - SITE.x, b.pos.z - SITE.z));
+    if (others[0] === bot) {
+      if (inSite(bot.pos.x, bot.pos.z)) return { channel: 'defuse' };
+      return { node: 7, point: { x: SITE.x - 3, z: SITE.z + 2 } };
+    }
+    return { node: [6, 13, 20][bot.id % 3], hold: true };
   }
   return { node: DEF_HOLDS[bot.id % DEF_HOLDS.length], hold: true };
 }
@@ -576,6 +666,7 @@ function frame() {
   const now = nowSec();
   const t = clock.elapsedTime;
   world.update(t);
+  stepParticles(dt);
   // The viewmodel belongs to the player's eyes only: menu vistas, the demo
   // and the match-end shot are spectator cameras and must not grow a gun.
   rig.group.visible = !G.demo && (G.phase === 'buy' || G.phase === 'live' || G.phase === 'roundEnd');
@@ -654,7 +745,15 @@ function frame() {
       if (mouseDown && player.locked) playerShoot(now);
       rig.finishReloadIfDue(now, sound);
       const kick = rig.update(dt, now, player.moveSpeedNow);
-      if (kick > 0) { /* recoil is visual on the rig; camera kick below */ }
+      // Camera recoil: the rig's kick curve drives the view pitch directly —
+      // muzzle climb on the shot, a smooth settle as the kick decays.
+      const dk = kick - prevKick;
+      prevKick = kick;
+      if (dk !== 0) player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch + dk));
+      const dYaw = rig.kickYaw - prevKickYaw;
+      prevKickYaw = rig.kickYaw;
+      if (dYaw !== 0) player.yaw += dYaw;
+      hud.setCrosshairSpread(rig.spreadNow(player.moveSpeedNow, !player.grounded));
       playerActor.weaponId = rig.current;
       hud.setVitals(playerActor.hp, playerActor.armor);
       const st = rig.state();
@@ -679,17 +778,26 @@ function frame() {
       else bot.syncMesh(dt);
     }
     if (G.demo) {
-      // Spectator camera for the demo: high SE corner, watching the pad and
-      // the lane the Jackals push down.
-      camera.position.set(6, 4.4, 10);
-      camera.lookAt(18, 0.8, -6);
+      // Demo camera: a fixed eye-level vantage on the push lane, looking
+      // into the pad. A high corner spectator shot made the cast read as
+      // toys on a diorama, and a follow-cam framed whatever the lead
+      // happened to hug; the pad fight is where the round converges, so
+      // plant the camera at 2 m and let the fight come to it.
       const lead = actors.find((a) => a.team === 'atk' && a.alive) ?? demoLead;
+      camera.position.set(7.5, 2.0, 8.5);
+      camera.lookAt(18, 1.0, -6);
       hud.setVitals(lead.hp, lead.armor);
       hud.setAlive(teamAlive('atk'), teamAlive('def'));
     }
   }
 
   hud.setAlive(teamAlive('atk'), teamAlive('def'));
+  if (shake > 0.004) {
+    camera.position.x += (Math.random() - 0.5) * shake * 0.13;
+    camera.position.y += (Math.random() - 0.5) * shake * 0.1;
+    camera.rotation.z += (Math.random() - 0.5) * shake * 0.018;
+    shake = Math.max(0, shake - dt * 1.5);
+  }
   renderer.render(scene, camera);
 }
 

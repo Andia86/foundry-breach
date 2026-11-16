@@ -10,7 +10,7 @@ export const WEAPONS = {
     id: 'pistol', name: 'Kestrel P9', price: 0, slot: 1,
     damage: 27, headMult: 2.4, interval: 0.24, auto: false,
     mag: 12, reserve: 60, reloadTime: 1.05,
-    spread: 0.006, spreadBloom: 0.004, spreadMove: 0.016,
+    spread: 0.006, spreadBloom: 0.006, spreadMove: 0.016,
     pellets: 1, kick: 0.010, tracer: 0xffd9a0,
   },
   smg: {
@@ -18,7 +18,7 @@ export const WEAPONS = {
     damage: 19, headMult: 2.0, interval: 0.075, auto: true,
     mag: 30, reserve: 120, reloadTime: 1.7,
     spread: 0.014, spreadBloom: 0.006, spreadMove: 0.024,
-    pellets: 1, kick: 0.007, tracer: 0xffe9b0,
+    pellets: 1, kick: 0.012, tracer: 0xffe9b0,
   },
   scatter: {
     id: 'scatter', name: 'Mule 12G', price: 1100, slot: 3,
@@ -31,8 +31,8 @@ export const WEAPONS = {
     id: 'rifle', name: 'VK-7 Longarm', price: 2400, slot: 4,
     damage: 34, headMult: 2.6, interval: 0.115, auto: true,
     mag: 25, reserve: 100, reloadTime: 1.9,
-    spread: 0.004, spreadBloom: 0.005, spreadMove: 0.02,
-    pellets: 1, kick: 0.013, tracer: 0xc8f4ff,
+    spread: 0.004, spreadBloom: 0.009, spreadMove: 0.02,
+    pellets: 1, kick: 0.018, tracer: 0xc8f4ff,
   },
 };
 export const BUY_ORDER = ['smg', 'scatter', 'rifle'];
@@ -87,17 +87,29 @@ export class SoundBank {
     osc.connect(g).connect(this.master);
     osc.start(t); osc.stop(t + dur + 0.02);
   }
-  shot(id) {
-    if (id === 'pistol') { this.noise(0.09, 2600, 0.5); this.blip(160, 0.07, 0.25, 'square', 60); }
-    else if (id === 'smg') { this.noise(0.06, 3400, 0.38); this.blip(200, 0.05, 0.18, 'square', 80); }
-    else if (id === 'rifle') { this.noise(0.13, 1900, 0.55); this.blip(120, 0.1, 0.3, 'sawtooth', 45); }
-    else if (id === 'scatter') { this.noise(0.28, 1200, 0.8, 'lowpass', 200); this.blip(90, 0.16, 0.35, 'sawtooth', 40); }
+  shot(id, vol = 1) {
+    if (id === 'pistol') { this.noise(0.09, 2600, 0.5 * vol); this.blip(160, 0.07, 0.25 * vol, 'square', 60); }
+    else if (id === 'smg') { this.noise(0.06, 3400, 0.38 * vol); this.blip(200, 0.05, 0.18 * vol, 'square', 80); }
+    else if (id === 'rifle') { this.noise(0.13, 1900, 0.55 * vol); this.blip(120, 0.1, 0.3 * vol, 'sawtooth', 45); }
+    else if (id === 'scatter') { this.noise(0.28, 1200, 0.8 * vol, 'lowpass', 200); this.blip(90, 0.16, 0.35 * vol, 'sawtooth', 40); }
   }
   dryFire() { this.blip(900, 0.04, 0.12, 'square'); }
   reloadStart() { this.blip(500, 0.05, 0.15, 'square'); setTimeout(() => this.blip(320, 0.05, 0.15, 'square'), 160); }
   reloadEnd() { this.blip(700, 0.05, 0.18, 'square'); setTimeout(() => this.blip(1050, 0.06, 0.2, 'square'), 90); }
-  hit(kill) { this.blip(kill ? 620 : 1150, kill ? 0.16 : 0.07, 0.22, 'sine', kill ? 240 : 900); }
-  hurt() { this.blip(140, 0.12, 0.2, 'sawtooth', 70); }
+  hit(kill) {
+    if (kill) {
+      // Kill confirm: a falling two-tone chirp plus a low thump, clearly
+      // distinct from the plain hit tick so a kill registers by ear alone.
+      this.blip(880, 0.09, 0.24, 'sine', 660);
+      setTimeout(() => this.blip(587, 0.14, 0.24, 'sine', 392), 55);
+      this.noise(0.12, 500, 0.18, 'lowpass', 120);
+    } else {
+      this.blip(1150, 0.06, 0.2, 'sine', 900);
+      this.noise(0.03, 4000, 0.07, 'highpass');
+    }
+  }
+  headshot() { this.blip(1560, 0.07, 0.2, 'square', 1180); }
+  hurt() { this.blip(140, 0.12, 0.2, 'sawtooth', 70); this.noise(0.08, 700, 0.12, 'lowpass', 200); }
   beep(final = false) { this.blip(final ? 1560 : 980, final ? 0.3 : 0.09, 0.2, 'sine'); }
   explosion() {
     this.noise(1.1, 900, 1.0, 'lowpass', 60);
@@ -160,10 +172,19 @@ export class WeaponRig {
       this.group.add(model);
       this.models[id] = model;
     }
-    this.flash = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.34, 0.34),
-      new THREE.MeshBasicMaterial({ color: 0xffc37a, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }),
-    );
+    // Muzzle flash: two crossed planes so the star reads from any roll.
+    this.flash = new THREE.Group();
+    const flashMat = new THREE.MeshBasicMaterial({ color: 0xffc37a, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+    for (const rz of [0, Math.PI / 2]) {
+      const p = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.15), flashMat);
+      p.rotation.z = rz;
+      this.flash.add(p);
+    }
+    const tongue = new THREE.Mesh(new THREE.PlaneGeometry(0.13, 0.34), flashMat);
+    tongue.rotation.x = Math.PI / 2;
+    tongue.position.z = -0.1;
+    this.flash.add(tongue);
+    this.flashMat = flashMat;
     this.flash.position.set(0, 0.02, -0.85);
     this.group.add(this.flash);
     this.flashLight = new THREE.PointLight(0xffb36b, 0, 9, 2);
@@ -177,6 +198,7 @@ export class WeaponRig {
     this.reloadUntil = 0;
     this.bloom = 0;
     this.kickPitch = 0;
+    this.kickYaw = 0;
     this.bobT = 0;
     this.switchUntil = 0;
     this.show('pistol');
@@ -204,8 +226,11 @@ export class WeaponRig {
     this.nextShotAt = now + w.interval;
     this.bloom = Math.min(0.05, this.bloom + w.spreadBloom);
     this.kickPitch += w.kick;
-    this.flash.material.opacity = 0.9;
+    this.kickYaw += (Math.random() - 0.5) * w.kick * 1.3;
+    this.flashMat.opacity = 0.95;
     this.flash.rotation.z = Math.random() * Math.PI;
+    const fs = 0.8 + Math.random() * 0.55;
+    this.flash.scale.set(fs, fs, fs);
     this.flashLight.intensity = 14;
     this.group.position.z = -0.38;
   }
@@ -233,17 +258,20 @@ export class WeaponRig {
     const w = WEAPONS[id];
     this.ammo[id] = { mag: w.mag, reserve: w.reserve };
   }
-  spreadNow(moving, airborne) {
+  spreadNow(moveSpeed, airborne) {
     const w = this.def();
     let s = w.spread + this.bloom;
-    if (moving) s += w.spreadMove;
+    // Movement penalty scales with actual speed: a slow walk barely
+    // opens the cone, a sprint blows it wide.
+    s += w.spreadMove * Math.min(1, moveSpeed / 4.5);
     if (airborne) s += 0.03;
     return s;
   }
   update(dt, now, moveSpeed) {
     this.bloom = Math.max(0, this.bloom - dt * 0.045);
     this.kickPitch = Math.max(0, this.kickPitch - dt * 0.09);
-    this.flash.material.opacity = Math.max(0, this.flash.material.opacity - dt * 14);
+    this.kickYaw *= Math.max(0, 1 - dt * 7);
+    this.flashMat.opacity = Math.max(0, this.flashMat.opacity - dt * 16);
     this.flashLight.intensity = Math.max(0, this.flashLight.intensity - dt * 160);
     this.group.position.z += (-0.45 - this.group.position.z) * Math.min(1, dt * 11);
     this.bobT += dt * (2 + moveSpeed * 1.6);
